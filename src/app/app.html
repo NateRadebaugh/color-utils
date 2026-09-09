@@ -2,38 +2,77 @@
   <section class="controls">
     <h1>Screenshot color picker</h1>
     <p class="hint">Paste a screenshot with <strong>Ctrl/Cmd + V</strong>, then drag, zoom, and click the image.</p>
-    <p class="status">{{ statusMessage() }}</p>
-    @if (copiedColor()) {
-      <p class="copied">Copied {{ copiedColor() }} to clipboard.</p>
-    }
+    <button type="button" class="reset-button" (click)="resetWorkspace()">Reset</button>
   </section>
 
-  <section class="preview-wrapper">
-    <canvas
-      #previewCanvas
-      class="preview-canvas"
-      (pointerdown)="onCanvasPointerDown($event)"
-      (pointermove)="onCanvasPointerMove($event)"
-      (pointerup)="onCanvasPointerUp($event)"
-      (pointerleave)="onCanvasPointerUp($event)"
-      (wheel)="onCanvasWheel($event)"
-      [class.preview-canvas--ready]="hasImage()"
-    ></canvas>
+  <section class="workspace">
+    <section class="preview-wrapper">
+      <canvas
+        #previewCanvas
+        class="preview-canvas"
+        (pointerdown)="onCanvasPointerDown($event)"
+        (pointermove)="onCanvasPointerMove($event)"
+        (pointerup)="onCanvasPointerUp($event)"
+        (pointerleave)="onCanvasPointerUp($event)"
+        (wheel)="onCanvasWheel($event)"
+        [class.preview-canvas--ready]="hasImage()"
+      ></canvas>
+    </section>
+
+    <section class="palette">
+      <h2>Palette</h2>
+      @if (palette().length === 0) {
+        <p class="hint">Click the image to add colors.</p>
+      } @else {
+        <ul>
+          @for (color of palette(); track color + '-' + $index) {
+            <li>
+              <button
+                type="button"
+                class="swatch"
+                [style.background]="color"
+                (click)="copyColor(color)"
+                [attr.aria-label]="'Copy ' + color"
+              ></button>
+              <button type="button" class="hex" (click)="copyColor(color)">{{ color }}</button>
+            </li>
+          }
+        </ul>
+      }
+    </section>
   </section>
 
-  <section class="palette">
-    <h2>Palette</h2>
-    @if (palette().length === 0) {
-      <p class="hint">Click the image to add colors.</p>
+  <section class="history">
+    <div class="history-header">
+      <h2>Screenshot history</h2>
+      <button type="button" class="history-toggle" (click)="toggleGallerySize()">
+        {{ galleryExpanded() ? 'Minimize' : 'Expand' }}
+      </button>
+    </div>
+
+    @if (screenshotHistory().length === 0) {
+      <p class="hint">Paste screenshots to build history.</p>
     } @else {
-      <ul>
-        @for (color of palette(); track color + '-' + $index) {
-          <li>
-            <button type="button" class="swatch" [style.background]="color" (click)="copyColor(color)" [attr.aria-label]="'Copy ' + color"></button>
-            <button type="button" class="hex" (click)="copyColor(color)">{{ color }}</button>
+      <ul [class.history-grid--expanded]="galleryExpanded()">
+        @for (item of screenshotHistory(); track item.id) {
+          <li [class.is-active]="item.id === activeScreenshotId()">
+            <button type="button" class="history-thumb" (click)="openHistoryItem(item)">
+              <img [src]="item.dataUrl" [alt]="'Screenshot ' + item.id" />
+            </button>
+            <button type="button" class="history-remove" (click)="removeHistoryItem(item.id)" aria-label="Remove screenshot">
+              ×
+            </button>
           </li>
         }
       </ul>
     }
   </section>
 </main>
+
+<div class="toast-stack" aria-live="polite" aria-atomic="true">
+  @for (toast of toasts(); track toast.id) {
+    <div class="toast" [class.toast--success]="toast.level === 'success'" [class.toast--error]="toast.level === 'error'">
+      {{ toast.text }}
+    </div>
+  }
+</div>
