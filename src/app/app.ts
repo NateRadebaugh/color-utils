@@ -8,6 +8,22 @@ import {
   viewChild,
 } from '@angular/core';
 
+type ToastLevel = 'info' | 'success' | 'error';
+
+interface ToastMessage {
+  id: number;
+  text: string;
+  level: ToastLevel;
+}
+
+interface ScreenshotHistoryItem {
+  id: string;
+  dataUrl: string;
+  width: number;
+  height: number;
+  palette: string[];
+}
+
 @Component({
   selector: 'app-root',
   styleUrl: './app.css',
@@ -16,14 +32,19 @@ import {
 export class App implements OnDestroy {
   protected readonly previewCanvas = viewChild.required<ElementRef<HTMLCanvasElement>>('previewCanvas');
   protected readonly palette = signal<string[]>([]);
-  protected readonly statusMessage = signal('Paste a screenshot with Ctrl/Cmd + V.');
-  protected readonly copiedColor = signal<string | null>(null);
   protected readonly hasImage = signal(false);
+  protected readonly toasts = signal<ToastMessage[]>([]);
+  protected readonly screenshotHistory = signal<ScreenshotHistoryItem[]>([]);
+  protected readonly activeScreenshotId = signal<string | null>(null);
+  protected readonly galleryExpanded = signal(false);
 
   private image: ImageBitmap | null = null;
   private readonly sourceCanvas = document.createElement('canvas');
   private readonly sourceContext = this.sourceCanvas.getContext('2d');
   private previewContext: CanvasRenderingContext2D | null = null;
+  private toastIdCounter = 0;
+  private historyIdCounter = 0;
+  private readonly toastTimers = new Map<number, number>();
   private zoom = 1;
   private panX = 0;
   private panY = 0;
@@ -43,6 +64,10 @@ export class App implements OnDestroy {
 
   ngOnDestroy(): void {
     this.image?.close();
+    for (const timeoutId of this.toastTimers.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    this.toastTimers.clear();
   }
 
   @HostListener('window:resize')
@@ -59,24 +84,26 @@ export class App implements OnDestroy {
     const imageFile = imageItem?.getAsFile();
 
     if (!imageFile) {
-      this.statusMessage.set('Clipboard has no image. Copy a screenshot first, then paste.');
+      this.showToast('Clipboard has no image. Copy a screenshot first, then paste.', 'error');
       return;
     }
 
     event.preventDefault();
-    const nextImage = await createImageBitmap(imageFile);
-    this.image?.close();
-    this.image = nextImage;
-    this.hasImage.set(true);
-
-    this.sourceCanvas.width = nextImage.width;
-    this.sourceCanvas.height = nextImage.height;
-    this.sourceContext?.clearRect(0, 0, nextImage.width, nextImage.height);
-    this.sourceContext?.drawImage(nextImage, 0, 0);
-
-    this.fitImageInView();
-    this.statusMessage.set('Image pasted. Drag to pan, wheel to zoom, click to sample colors.');
-    this.renderPreview();
+    try {
+      const [nextImage, dataUrl] = await Promise.all([createImageBitmap(imageFile), this.blobToDataUrl(imageFile)]);
+      const historyItem: ScreenshotHistoryItem = {
+        id: this.nextHistoryId(),
+        dataUrl,
+        width: nextImage.width,
+        height: nextImage.height,
+        palette: [],
+      };
+      this.screenshotHistory.update((history) => [historyItem, ...history]);
+      await this.activateHistoryItem(historyItem, nextImage);
+      this.showToast('Image pasted. Drag to pan, wheel to zoom, click to sample colors.', 'success');
+    } catch {
+      this.showToast('Unable to read the pasted image.', 'error');
+    }
   }
 
   protected onCanvasPointerDown(event: PointerEvent): void {
@@ -146,11 +173,57 @@ export class App implements OnDestroy {
 
   protected addColorToPalette(hex: string): void {
     this.palette.update((colors) => [...colors, hex]);
+    const activeId = this.activeScreenshotId();
+    if (!activeId) {
+      return;
+    }
+    this.screenshotHistory.update((history) =>
+      history.map((item) =>
+        item.id === activeId ? { ...item, palette: [...item.palette, hex] } : item,
+      ),
+    );
   }
 
   protected async copyColor(hex: string): Promise<void> {
-    await this.copyToClipboard(hex);
-    this.copiedColor.set(hex);
+    try {
+      await this.copyToClipboard(hex);
+      this.showToast(`Copied ${hex} to clipboard.`, 'success');
+    } catch {
+      this.showToast(`Failed to copy ${hex}.`, 'error');
+    }
+  }
+
+  protected async openHistoryItem(item: ScreenshotHistoryItem): Promise<void> {
+    await this.activateHistoryItem(item);
+  }
+
+  protected async removeHistoryItem(itemId: string): Promise<void> {
+    const currentHistory = this.screenshotHistory();
+    const nextHistory = currentHistory.filter((item) => item.id !== itemId);
+    const wasActive = this.activeScreenshotId() === itemId;
+    this.screenshotHistory.set(nextHistory);
+
+    if (!wasActive) {
+      return;
+    }
+
+    if (nextHistory.length === 0) {
+      this.clearCurrentImage();
+      this.showToast('Removed screenshot from history.', 'info');
+      return;
+    }
+
+    await this.activateHistoryItem(nextHistory[0]);
+    this.showToast('Removed screenshot from history.', 'info');
+  }
+
+  protected toggleGallerySize(): void {
+    this.galleryExpanded.update((expanded) => !expanded);
+  }
+
+  protected resetWorkspace(): void {
+    this.clearCurrentImage();
+    this.showToast('Reset current image and palette.', 'info');
   }
 
   private sampleColorAtClientPoint(clientX: number, clientY: number): void {
@@ -229,5 +302,82 @@ export class App implements OnDestroy {
     textArea.select();
     document.execCommand('copy');
     textArea.remove();
+  }
+
+  private nextHistoryId(): string {
+    this.historyIdCounter += 1;
+    return `shot-${this.historyIdCounter}`;
+  }
+
+  private async activateHistoryItem(item: ScreenshotHistoryItem, image?: ImageBitmap): Promise<void> {
+    try {
+      const nextImage = image ?? (await this.imageBitmapFromDataUrl(item.dataUrl));
+      this.setCurrentImage(nextImage);
+      this.palette.set([...item.palette]);
+      this.activeScreenshotId.set(item.id);
+      this.renderPreview();
+    } catch {
+      this.showToast('Unable to load this screenshot from history.', 'error');
+    }
+  }
+
+  private setCurrentImage(nextImage: ImageBitmap): void {
+    this.image?.close();
+    this.image = nextImage;
+    this.hasImage.set(true);
+    this.sourceCanvas.width = nextImage.width;
+    this.sourceCanvas.height = nextImage.height;
+    this.sourceContext?.clearRect(0, 0, nextImage.width, nextImage.height);
+    this.sourceContext?.drawImage(nextImage, 0, 0);
+    this.fitImageInView();
+  }
+
+  private clearCurrentImage(): void {
+    this.image?.close();
+    this.image = null;
+    this.hasImage.set(false);
+    this.palette.set([]);
+    this.activeScreenshotId.set(null);
+    this.zoom = 1;
+    this.panX = 0;
+    this.panY = 0;
+    this.renderPreview();
+  }
+
+  private blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  private async imageBitmapFromDataUrl(dataUrl: string): Promise<ImageBitmap> {
+    const response = await fetch(dataUrl);
+    if (!response.ok) {
+      throw new Error('Unable to load image data.');
+    }
+    const blob = await response.blob();
+    return createImageBitmap(blob);
+  }
+
+  private showToast(text: string, level: ToastLevel): void {
+    this.toastIdCounter += 1;
+    const toastId = this.toastIdCounter;
+    this.toasts.update((toasts) => [...toasts, { id: toastId, text, level }]);
+    const timeoutId = window.setTimeout(() => {
+      this.dismissToast(toastId);
+    }, 2800);
+    this.toastTimers.set(toastId, timeoutId);
+  }
+
+  private dismissToast(toastId: number): void {
+    const timeoutId = this.toastTimers.get(toastId);
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+      this.toastTimers.delete(toastId);
+    }
+    this.toasts.update((toasts) => toasts.filter((toast) => toast.id !== toastId));
   }
 }
