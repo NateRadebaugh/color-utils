@@ -30,4 +30,27 @@ describe('App', () => {
 
     expect(app['palette']()).toEqual(['#112233', '#AABBCC']);
   });
+
+  it('should reset current palette and active screenshot state', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance;
+
+    app['palette'].set(['#112233']);
+    app['activeScreenshotId'].set('shot-1');
+    app['hasImage'].set(true);
+    app['resetWorkspace']();
+
+    expect(app['palette']()).toEqual([]);
+    expect(app['activeScreenshotId']()).toBeNull();
+    expect(app['hasImage']()).toBe(false);
+  });
+
+  it('should toggle gallery size state', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance;
+
+    expect(app['galleryExpanded']()).toBe(false);
+    app['toggleGallerySize']();
+    expect(app['galleryExpanded']()).toBe(true);
+  });
 });
