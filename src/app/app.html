@@ -1,0 +1,39 @@
+<main class="app-shell">
+  <section class="controls">
+    <h1>Screenshot color picker</h1>
+    <p class="hint">Paste a screenshot with <strong>Ctrl/Cmd + V</strong>, then drag, zoom, and click the image.</p>
+    <p class="status">{{ statusMessage() }}</p>
+    @if (copiedColor()) {
+      <p class="copied">Copied {{ copiedColor() }} to clipboard.</p>
+    }
+  </section>
+
+  <section class="preview-wrapper">
+    <canvas
+      #previewCanvas
+      class="preview-canvas"
+      (pointerdown)="onCanvasPointerDown($event)"
+      (pointermove)="onCanvasPointerMove($event)"
+      (pointerup)="onCanvasPointerUp($event)"
+      (pointerleave)="onCanvasPointerUp($event)"
+      (wheel)="onCanvasWheel($event)"
+      [class.preview-canvas--ready]="hasImage()"
+    ></canvas>
+  </section>
+
+  <section class="palette">
+    <h2>Palette</h2>
+    @if (palette().length === 0) {
+      <p class="hint">Click the image to add colors.</p>
+    } @else {
+      <ul>
+        @for (color of palette(); track color + '-' + $index) {
+          <li>
+            <button type="button" class="swatch" [style.background]="color" (click)="copyColor(color)" [attr.aria-label]="'Copy ' + color"></button>
+            <button type="button" class="hex" (click)="copyColor(color)">{{ color }}</button>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+</main>
